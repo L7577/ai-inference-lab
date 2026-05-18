@@ -14,7 +14,7 @@ for pod in model-high model-mid model-low; do
   port="${PORTS[$pod]}"
   kubectl exec -n "${NS}" "${pod}" -- python -c "
 import urllib.request,json
-data=json.dumps({'messages':[{'role':'user','content':'Hello'}],'max_tokens':16}).encode()
+data=json.dumps({'messages':[{'role':'user','content':'Hi'}],'max_tokens':8}).encode()
 req=urllib.request.Request('http://localhost:${port}/v1/chat/completions',data=data,headers={'Content-Type':'application/json'})
 urllib.request.urlopen(req)
 " 2>/dev/null || true
@@ -36,13 +36,16 @@ echo "--- Post-load /metrics Comparison ---"
 echo ""
 for pod in model-high model-mid model-low; do
   port="${PORTS[$pod]}"
-  kubectl exec -n "${NS}" "${pod}" -- python3 -c "
+  kubectl exec -n "${NS}" "${pod}" -- python -c "
 import urllib.request,json
 r=urllib.request.urlopen('http://localhost:${port}/metrics')
 d=json.loads(r.read())
-g=d['gpu']
-print('%-12s  ok=%4d  ttft=%6.1fms  rps=%6.1f  gpu=%4d/%4dMB' % ('${pod}', d['requests_ok'], d['ttft_avg_ms'], d['throughput_rps'], g['memory_used_mb'], g['memory_total_mb']))
-" 2>/dev/null
+g=d.get('gpu',{})
+ok=d.get('requests_ok',0); total=d.get('requests_total',0)
+ttft=d.get('ttft_avg_ms',0); rps=d.get('throughput_rps',0)
+um=g.get('memory_used_mb',0); tm=g.get('memory_total_mb',0)
+print('${pod}  ok=%d/%d  ttft=%.1fms  rps=%.1f  gpu=%d/%dMB' % (ok,total,ttft,rps,um,tm))
+" 2>/dev/null || true
 done
 
 echo ""

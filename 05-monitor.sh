@@ -18,7 +18,7 @@ while true; do
 
   ts=$(date +%H:%M:%S)
   echo "--- ${ts} (t+${elapsed}s) ---"
-  echo "  POD           OK  AVG_TTFT     RPS  GPU_USED GPU_TOTAL"
+  printf "  %-12s %5s %8s %7s %9s %9s\n" POD OK AVG_TTFT RPS GPU_USED GPU_TOTAL
 
   for pod in model-high model-mid model-low; do
     port="${PORTS[$pod]}"
@@ -27,10 +27,13 @@ import urllib.request,json
 try:
     r=urllib.request.urlopen('http://localhost:${port}/metrics')
     d=json.loads(r.read())
-    g=d['gpu']
-    print('  %-12s  ok=%4d  ttft=%6.1fms  rps=%6.1f  gpu=%4d/%4dMB' % ('${pod}', d['requests_ok'], d['ttft_avg_ms'], d['throughput_rps'], g['memory_used_mb'], g['memory_total_mb']))
+    g=d.get('gpu',{})
+    ok=d.get('requests_ok',0); ttft=d.get('ttft_avg_ms',0)
+    rps=d.get('throughput_rps',0); um=g.get('memory_used_mb',0)
+    tm=g.get('memory_total_mb',0)
+    print('  %-12s  ok=%4d  ttft=%6.1fms  rps=%6.1f  gpu=%4d/%4dMB' % ('${pod}',ok,ttft,rps,um,tm))
 except Exception as e:
-    print('  ' + '${pod}' + '  error: ' + str(e))
+    print('  %-12s  error: %s' % ('${pod}',str(e)))
 " 2>/dev/null || true
   done
   sleep "${INTERVAL}"

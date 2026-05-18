@@ -21,12 +21,20 @@ docker images --format '{{.Repository}}:{{.Tag}}' | grep -q "^${DRIVER_IMAGE}$" 
 echo "[OK] pre-flight checks"
 
 # --- Build inference image ---
-if docker images --format '{{.Repository}}:{{.Tag}}' | grep -q "^${INFER_IMAGE}$"; then
-  echo "[OK] inference image already built: ${INFER_IMAGE}"
+echo "Building inference image..."
+docker build -t "${INFER_IMAGE}" "${DIR}"
+echo "[OK] image built"
+
+# --- GPU health check (host) ---
+echo "Checking host GPU..."
+if command -v nvidia-smi &>/dev/null; then
+  gpu_free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader 2>/dev/null | head -1 || echo "unknown")
+  echo "  GPU free memory: ${gpu_free}"
+  if [ "${gpu_free}" != "unknown" ] && [ "$(echo "${gpu_free}" | grep -o '[0-9]\+')" -lt 2048 ]; then
+    echo "WARNING: GPU free memory (${gpu_free} MiB) is low. A reboot may be needed if this persists."
+  fi
 else
-  echo "Building inference image (one-time, ~5min)..."
-  docker build -t "${INFER_IMAGE}" "${DIR}"
-  echo "[OK] image built"
+  echo "  nvidia-smi not found — skipping host GPU check"
 fi
 
 # --- Create kind cluster ---

@@ -37,10 +37,10 @@ print(json.dumps(json.loads(r.read()),indent=2))
 import urllib.request,json
 r=urllib.request.urlopen('http://localhost:${port}/metrics')
 d=json.loads(r.read())
-print('  requests: ' + str(d['requests_ok']) + '/' + str(d['requests_total']))
-print('  ttft_avg: ' + str(d['ttft_avg_ms']) + 'ms  rps: ' + str(round(d['throughput_rps'],1)))
-g=d['gpu']
-print('  GPU mem: ' + str(g['memory_used_mb']) + 'MB used / ' + str(g['memory_total_mb']) + 'MB total')
+print('  requests: ' + str(d.get('requests_ok',0)) + '/' + str(d.get('requests_total',0)))
+print('  ttft_avg: ' + str(d.get('ttft_avg_ms',0)) + 'ms  rps: ' + str(round(d.get('throughput_rps',0),1)))
+g=d.get('gpu',{})
+print('  GPU mem: ' + str(g.get('memory_used_mb',0)) + 'MB used / ' + str(g.get('memory_total_mb',0)) + 'MB total')
 " 2>/dev/null || echo "  WARN: metrics failed"
 done
 

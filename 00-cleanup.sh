@@ -8,8 +8,10 @@ NS_DRIVER="hami-dra-driver"
 echo "=== Cleanup ==="
 
 for ns in "${NS_APP}" test-dra; do
-  kubectl delete resourceclaims --all -n "${ns}" --ignore-not-found --wait=false 2>/dev/null || true
-  kubectl delete pods --all -n "${ns}" --ignore-not-found --wait=false 2>/dev/null || true
+  # Delete pods first — they hold ResourceClaims, which can't be released while in use
+  kubectl delete pods --all -n "${ns}" --ignore-not-found --wait=true --timeout=30s 2>/dev/null || true
+  # Now safe to delete claims (pods have released them)
+  kubectl delete resourceclaims --all -n "${ns}" --ignore-not-found --wait=true --timeout=30s 2>/dev/null || true
   kubectl delete services --all -n "${ns}" --ignore-not-found 2>/dev/null || true
   kubectl delete configmaps --all -n "${ns}" --ignore-not-found 2>/dev/null || true
   kubectl delete namespace "${ns}" --ignore-not-found --wait=false 2>/dev/null || true
