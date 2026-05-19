@@ -16,15 +16,46 @@
 | 负载测试 | 无 | 并发请求 + 延迟/吞吐统计 |
 | GPU 监控 | 无 | /metrics 端点持续采集 |
 
-### 1.3 硬件环境
+### 1.3 实验环境
+
+#### 硬件
 
 | 项目 | 规格 |
 |------|------|
 | GPU | NVIDIA GeForce GTX 1050 Ti |
+| GPU 架构 | Pascal (GP107) |
+| CUDA Cores | 768 |
 | 物理显存 | 4096 MiB (4 GiB) |
+| 显存类型 | GDDR5 |
+| 显存带宽 | 112 GB/s |
+| L2 Cache | 1 MB |
+| PCIe | 3.0 x16 (~16 GB/s) |
 | NVIDIA 驱动 | 550.163.01 |
-| Kubernetes | v1.34.0 (kind) |
-| CPU | 主机 CPU |
+| 主机内存 | ≥ 8 GiB |
+
+#### 软件
+
+| 工具 | 版本 | 用途 |
+|------|------|------|
+| Docker | 20.10+ | 容器构建和运行 |
+| kind | 0.20+ | 本地 Kubernetes 集群 |
+| kubectl | 1.28+ | 集群管理 |
+| Kubernetes | v1.34.0 (kind) | 容器编排；启用 DynamicResourceAllocation + DRAConsumableCapacity |
+| Python | 3.11 (容器内) | GPU 推理服务 + 负载测试脚本 |
+| nvidia-container-toolkit | 1.13+ | GPU 容器运行时；accept-nvidia-visible-devices-as-volume-mounts=true |
+| bash | 4.0+ | 所有流程脚本 |
+
+#### 镜像
+
+| 镜像 | 来源 | 大小 | 用途 |
+|------|------|------|------|
+| `kindest/node:v1.34.0` | registry.k8s.io | ~1.2 GB | kind 集群节点镜像 |
+| `python:3.11-slim` | Docker Hub | 124 MB | 推理服务基础镜像 |
+| `nvidia/cuda:12.2.2-base-ubuntu22.04` | Docker Hub | — | 提取 libcudart.so.12（COPY --from，不进入最终镜像） |
+| `ai-inference-lab:latest` | 本地 `docker build` | 125 MB | 推理服务最终镜像（python + libcudart + server.py） |
+| `projecthami/k8s-dra-driver:v0.1.0` | 本地构建 | 103 MB | HAMi-DRA GPU 分片驱动 (DaemonSet) |
+
+> 推理镜像的关键特性：基于 python:3.11-slim，仅从 nvidia/cuda 提取 libcudart.so.12 单文件（73 MB），无 pip 安装、无模型权重。最终镜像 125 MB，构建 < 5 秒。
 
 ---
 
@@ -316,41 +347,131 @@ cores 分配越大，吞吐量越高、延迟越低，性能呈线性梯度。
 
 ---
 
-## 5. 关键文件清单
+## 5. 关键文件
 
 ```
 ai-inference-lab/
-├── Dockerfile            # 推理镜像 (python:3.11-slim + libcudart.so.12)
-├── server.py             # GPU 推理服务 (ctypes CUDA, 3 个 API 端点)
-├── load_test.py          # 并发负载生成器
-├── kind-config.yaml      # kind 集群配置
-├── 00-cleanup.sh         # 全量清理
-├── 01-infra.sh           # 基础设施 (集群+驱动+镜像构建)
-├── 02-deploy.sh          # 部署 3 分片 Pod
-├── 03-verify.sh          # 分片验证 (env + GPU + API)
-├── 04-load-test.sh       # 并发负载对比
-├── 05-monitor.sh         # GPU 持续监控
-├── 06-extended-test.sh   # 扩展测试 (solo/并发/干扰)
-├── extended_test.py      # 扩展测试脚本
-├── load_test.py          # 并发负载生成器
-└── server.py             # GPU 推理服务
+├── Dockerfile              # 推理镜像 (python:3.11-slim + libcudart.so.12)
+├── server.py               # GPU 推理服务 (ctypes CUDA, 3 个 API 端点)
+├── load_test.py            # 基础并发负载生成器
+├── extended_test.py        # 扩展测试脚本 (solo/并发/干扰)
+├── kind-config.yaml        # kind 集群配置
+├── Makefile                # 流程封装 (all, clean, infra, deploy, tests)
+├── 00-cleanup.sh           # 全量清理 (Pod→Claim→NS→cluster)
+├── 01-infra.sh             # 基础设施 (kind 集群 + DRA 驱动 + 镜像)
+├── 02-deploy.sh            # 部署 3 分片 Pod + Service
+├── 03-verify.sh            # 分片验证 (HAMi env + /health + /metrics)
+├── 04-load-test.sh         # 基础并发负载对比 (30req × 3 Pod)
+├── 05-monitor.sh           # GPU 持续监控 (默认 30s)
+├── 06-extended-test.sh     # 扩展测试执行脚本
+├── PLAN.md                 # 方案设计
+├── EXPERIMENT-REPORT.md    # 完整实验报告
+├── PROBLEM-REPORT.md       # 已知问题及修复记录
+└── README.md               # 项目入口文档
 ```
 
 ---
 
 ## 6. 扩展测试：性能隔离与共享开销
 
-在原实验基础上，追加三项测试以量化 GPU 分片下的性能隔离效果。
+在原实验基础上，追加三项测试以量化 GPU 分片下的性能隔离效果。每项测试对应一个独立结论。
 
-### 6.1 测试目的
+### 6.1 Solo 基线：Cores 是软限制
 
-| 测试 | 目的 | 方法 |
+**目的**：获得各 Pod 独占 GPU 时的吞吐上限，验证 cores 限制在无争抢场景下的实际影响。
+
+**方法**：每 Pod 单独满负载运行（并发=8，请求=80），其他 Pod 空闲。
+
+**结果**：
+
+| Pod | cores | memory | 吞吐 (req/s) | P50 (ms) | P99 (ms) |
+|-----|-------|--------|-------------|----------|----------|
+| model-high | 40 | 1600Mi | 12.0 | 64.4 | 87.9 |
+| model-mid | 35 | 1200Mi | 12.0 | 68.5 | 84.3 |
+| model-low | 25 | 800Mi | 12.0 | 73.8 | 87.0 |
+
+**关键发现**：三 Pod 的吞吐量完全相同（12.0 req/s），但延迟呈现明显梯度——cores 越小，P50 延迟越高（64.4 → 68.5 → 73.8ms）。
+
+**技术解释**：HAMi-Core 的 cores 限制是 GPU 时间片调度比例上限，而非物理核心数硬限制。在 GPU 未饱和（单 Pod 独占时 GPU 算力充足）的场景下，每个请求都能分配到足够的计算时间，吞吐不受影响。但 cores 限制了单次 CUDA kernel 调用的 SM 占用率，因此处理单个请求的时间变长，表现为延迟升高。
+
+**实践含义**：如果只部署一个推理服务（独占 GPU 场景），选择最低的 cores 分配（25）即可获得相同吞吐，同时节省资源配额留给其他服务。
+
+### 6.2 并发高负载：共享开销 35.8%
+
+**目的**：测量三 Pod 同时满负载运行时的实际吞吐衰减。
+
+**方法**：三 Pod 同时满负载（并发=8，请求=80），对比 Solo 吞吐总和。
+
+**结果**：
+
+| Pod | 吞吐 (req/s) | P50 (ms) | P99 (ms) |
+|-----|-------------|----------|----------|
+| model-high | 7.7 | 110.3 | 171.7 |
+| model-mid | 7.7 | 110.0 | 160.7 |
+| model-low | 7.7 | 111.7 | 177.7 |
+
+**共享开销量化**：
+
+| 指标 | 值 |
+|------|-----|
+| Solo 吞吐总和 | 36.0 req/s |
+| 并发吞吐总和 | 23.1 req/s |
+| **共享开销** | **35.8%** |
+
+**开销来源分析**：
+
+1. **CUDA Context Switch（主要开销）**：GTX 1050 Ti 只有 768 个 CUDA core，三 Pod 的 cores 分配（40+35+25=100 逻辑份额）全部映射到同一组物理核心，导致频繁的上下文切换。每次切换需要刷新 SM 寄存器、L1 Cache 和共享内存，开销随 Pod 数量增加。
+
+2. **显存带宽争抢**：GTX 1050 Ti 显存带宽 112 GB/s，三 Pod 同时执行 cudaMemcpy 操作时，GDDR5 控制器在多请求方之间轮转，有效带宽被均分，单请求的 H2D/D2H 传输时间增加。
+
+3. **PCIe 总线队列**：H2D（Host-to-Device）memcpy 需要经过 PCIe 3.0 x16 链路（~16 GB/s），三 Pod 的并发请求在 PCIe 总线形成排队延迟。
+
+**不同 GPU 规格的预期开销**：
+
+| GPU 规格 | CUDA Cores | 显存带宽 | 预期 3-Pod 共享开销 |
+|----------|-----------|---------|-------------------|
+| GTX 1050 Ti (本实验) | 768 | 112 GB/s | ~35% |
+| RTX 3060 | 3584 | 360 GB/s | ~15-20% |
+| RTX 4090 | 16384 | 1008 GB/s | ~5-10% |
+| A100 | 6912 | 1555 GB/s | ~3-5% |
+
+> 以上为基于硬件规格的理论估算，实际开销受负载特征、显存分配模式等因素影响。
+
+### 6.3 干扰测试：邻居噪声不可忽略
+
+**目的**：检测 HAMi-Core 算力隔离在存在高负载邻居时是否有效。
+
+**方法**：Pod A（model-high）满负载运行，测量空闲 Pod B/C 的请求延迟变化。
+
+**结果**：
+
+| Pod | 角色 | 基线 P50 (ms) | 干扰下 P50 (ms) | 增加 |
+|-----|------|-------------|---------------|------|
+| model-mid | 空闲 | 51.1 | 90.0 | +38.9ms (+76%) |
+| model-low | 空闲 | 56.8 | 93.8 | +37.0ms (+65%) |
+
+**技术解释**：HAMi-Core 通过 CUDA 调用拦截实现算力隔离（限制 SM 占用率），但**无法隔离以下硬件资源**：
+
+- **显存带宽**：GDDR5 控制器对所有 CUDA context 平等服务，邻居的密集 memcpy 操作直接挤占受害者的显存带宽。每次推理需要 ~32MB×3 次迭代=96MB 的 memcpy 传输，被邻居抢占后传输时间延长。
+- **PCIe 总线**：H2D memcpy 共享 PCIe 上行链路，邻居的持续请求导致总线仲裁延迟。
+- **L2 Cache**：GTX 1050 Ti 的 L2 cache（1MB）在所有 SM 之间共享，邻居的 kernel 会逐出受害者的 cache line。
+
+**实践含义**：延迟敏感的在线推理服务不应与高负载服务共享同一张物理 GPU。如需混合部署，应将延迟敏感服务分配较高的 cores 比例（相对优先调度），但仍无法完全消除显存带宽层面的干扰。
+
+### 6.4 部署建议矩阵
+
+基于以上三项测试的结论，汇总不同场景的部署策略：
+
+| 场景 | 建议 | 原因 |
 |------|------|------|
-| Solo 基线 | 获得各 Pod 独占 GPU 时的吞吐上限 | 每 Pod 单独满负载运行 |
-| 并发高负载 | 测量共享后的实际吞吐 | 三 Pod 同时满负载运行 |
-| 干扰测试 | 检测算力隔离是否有效 | Pod A 满负载，测量空闲 B/C 的延迟变化 |
+| 延迟敏感在线推理 | 独占 GPU，或仅与空闲 Pod 共卡 | 邻居负载导致 P50 延迟增加 65-76% |
+| 批处理离线任务 | 可多 Pod 共享，接受 ~35% 吞吐损失 | 对单请求延迟不敏感，总吞吐仍可接受 |
+| 混合部署（在线+离线） | GTX 1050 Ti 级别不建议 | 显存带宽和 PCIe 争抢无法通过算力隔离消除 |
+| 低端 GPU 最大密度 | ≤ 2 Pod/卡（GTX 1050 Ti 级别） | 3 Pod 时共享开销已达 35.8%，继续增加会急剧恶化 |
+| 中高端 GPU（RTX 3060+） | 可尝试 3-4 Pod/卡 | CUDA core 和显存带宽充裕，上下文切换开销相对较小 |
+| 需要严格隔离 | 使用 MIG-capable GPU（A100/A30/H100） | MIG 在硬件层面切分显存和算力，消除软件隔离的带宽争抢问题 |
 
-### 6.2 执行
+### 6.5 执行方式
 
 ```bash
 # 全部三项
@@ -366,65 +487,7 @@ CONCURRENCY=16 make test-solo
 REQUESTS=200 make test-extended
 ```
 
-### 6.3 结果
-
-**环境**: 三 Pod 已通过 `make deploy` 部署并验证（同实验主流程）。
-
-#### Solo 基线 (并发=8, 请求=80)
-
-| Pod | cores | memory | 吞吐 (req/s) | P50 (ms) | P99 (ms) |
-|-----|-------|--------|-------------|----------|----------|
-| model-high | 40 | 1600Mi | 12.0 | 64.4 | 87.9 |
-| model-mid | 35 | 1200Mi | 12.0 | 68.5 | 84.3 |
-| model-low | 25 | 800Mi | 12.0 | 73.8 | 87.0 |
-
-**Solo 总吞吐**: 36.0 req/s
-
-cores 分配对吞吐无影响（单 Pod 未触达算力上限），但对延迟有梯度效应：cores 越小，延迟越高（64.4 → 68.5 → 73.8ms）。
-
-#### 并发高负载 (三 Pod 同时, 各 并发=8/请求=80)
-
-| Pod | 吞吐 (req/s) | P50 (ms) | P99 (ms) |
-|-----|-------------|----------|----------|
-| model-high | 7.7 | 110.3 | 171.7 |
-| model-mid | 7.7 | 110.0 | 160.7 |
-| model-low | 7.7 | 111.7 | 177.7 |
-
-**并发总吞吐**: 23.1 req/s
-
-#### 共享开销
-
-| 指标 | 值 |
-|------|-----|
-| Solo 吞吐总和 | 36.0 req/s |
-| 并发吞吐总和 | 23.1 req/s |
-| **共享开销** | **35.8%** |
-| model-high 降幅 | -35.8% |
-| model-mid 降幅 | -35.8% |
-| model-low 降幅 | -35.8% |
-
-#### 干扰测试
-
-| Pod | 角色 | 基线 P50 (ms) | 干扰下 P50 (ms) | 增加 |
-|-----|------|-------------|---------------|------|
-| model-high | 攻击者 (满负载) | — | — | — |
-| model-mid | 空闲 | 51.1 | 90.0 | +38.9ms (+76%) |
-| model-low | 空闲 | 56.8 | 93.8 | +37.0ms (+65%) |
-
-空闲 Pod 在邻居满负载时延迟增加 65-76%，说明 HAMi 算力软隔离无法完全消除显存带宽和 PCIe 争抢。
-
-### 6.4 分析
-
-1. **共享开销显著 (35.8%)**：三 Pod 共享 GPU 时总吞吐下降超过三分之一，远超预期。GTX 1050 Ti 只有 768 个 CUDA core，三 Pod 的 cores 分配 (40+35+25=100) 已占满全部物理核心，上下文切换频繁。
-
-2. **cores 限制为软上限**：Solo 测试中三 Pod 吞吐相同（12.0 req/s），但延迟呈现梯度。这说明在无争抢时，cores 限制不影响吞吐量（GPU 未饱和），仅影响单个请求的处理速度。
-
-3. **干扰不可忽略**：空闲 Pod 在邻居满负载时延迟增加 65-76%。虽然 HAMi 限制了算力使用率上限，但无法隔离显存带宽和 PCIe 总线竞争。这对在线推理意味着：延迟敏感的服务不应与高负载服务共卡。
-
-4. **共享密度建议**：GTX 1050 Ti (4GB, 768 cores) 上建议同时运行不超过 2 个推理服务。若需 3 个以上，应考虑：
-   - 降低各 Pod 的 cores 分配（减少争抢）
-   - 将延迟敏感服务独立部署
-   - 使用 MIG-capable GPU（1050 Ti 不支持）
+**测试架构**：扩展测试通过 `kubectl cp` 将 `extended_test.py` 注入 model-high Pod，使用 Pod 内 Python 运行时执行。测试通过 Kubernetes Service DNS（`http://model-high:8001` 等）访问各 Pod，与实际部署拓扑一致。
 
 ---
 
