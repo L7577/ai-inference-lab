@@ -4,8 +4,8 @@ set -euo pipefail
 CLUSTER="k8s-dra-driver-cluster"
 DRIVER_IMAGE="projecthami/k8s-dra-driver:v0.1.0"
 INFER_IMAGE="ai-inference-lab:latest"
-DRA_DIR="/home/l/dev/testclaude/k8s-dra-driver"
 DIR="$(cd "$(dirname "$0")" && pwd)"
+DRA_DIR="${DIR}/../k8s-dra-driver"
 
 echo "=== Phase 1: Infrastructure ==="
 

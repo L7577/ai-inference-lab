@@ -5,7 +5,7 @@
 ## 快速开始
 
 ```bash
-cd /home/l/dev/testclaude/ai-inference-lab
+cd ai-inference-lab
 make all
 ```
 
@@ -61,9 +61,11 @@ make all
 | `ai-inference-lab:latest` | 本地 `docker build` | 125 MB | 推理服务最终镜像 |
 | `projecthami/k8s-dra-driver:v0.1.0` | 本地构建 | 103 MB | HAMi-DRA GPU 分片驱动 |
 
+k8s-dra-driver 是独立 Git 仓库，需单独克隆并构建：
+
 ```bash
-# 构建 driver 镜像（在 k8s-dra-driver 目录）
-cd /home/l/dev/testclaude/k8s-dra-driver && make image
+git clone https://github.com/Project-HAMi/k8s-dra-driver.git ../k8s-dra-driver
+cd ../k8s-dra-driver && make image
 ```
 
 ## 实验拓扑

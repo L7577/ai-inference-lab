@@ -18,9 +18,10 @@ for ns in "${NS_APP}" test-dra; do
 done
 
 kubectl delete deviceclasses hami-core-gpu.project-hami.io --ignore-not-found 2>/dev/null || true
-kubectl delete -f /home/l/dev/testclaude/k8s-dra-driver/demo/yaml/ds.yaml --ignore-not-found 2>/dev/null || true
-kubectl delete -f /home/l/dev/testclaude/k8s-dra-driver/demo/yaml/rbac.yaml --ignore-not-found 2>/dev/null || true
-kubectl delete -f /home/l/dev/testclaude/k8s-dra-driver/demo/yaml/setup.yaml --ignore-not-found 2>/dev/null || true
+DRA_DIR="$(cd "$(dirname "$0")" && pwd)/../k8s-dra-driver"
+kubectl delete -f "${DRA_DIR}/demo/yaml/ds.yaml" --ignore-not-found 2>/dev/null || true
+kubectl delete -f "${DRA_DIR}/demo/yaml/rbac.yaml" --ignore-not-found 2>/dev/null || true
+kubectl delete -f "${DRA_DIR}/demo/yaml/setup.yaml" --ignore-not-found 2>/dev/null || true
 helm uninstall hami-dra-driver -n "${NS_DRIVER}" 2>/dev/null || true
 kubectl delete namespace "${NS_DRIVER}" --ignore-not-found --wait=false 2>/dev/null || true
 

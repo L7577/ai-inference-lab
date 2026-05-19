@@ -112,7 +112,7 @@
 ### Step 0: 环境清理
 
 ```bash
-cd /home/l/dev/testclaude/ai-inference-lab
+cd ai-inference-lab
 make clean
 ```
 
@@ -498,13 +498,13 @@ REQUESTS=200 make test-extended
 - NVIDIA GPU + 驱动 (≥ 440)
 - nvidia-container-toolkit（`accept-nvidia-visible-devices-as-volume-mounts=true`）
 - docker、kind、kubectl
-- k8s-dra-driver 源码（`/home/l/dev/testclaude/k8s-dra-driver`）
+- k8s-dra-driver 源码（`../k8s-dra-driver`，独立 Git 仓库）
 - driver 镜像：`projecthami/k8s-dra-driver:v0.1.0`
 
 ### 一键执行
 
 ```bash
-cd /home/l/dev/testclaude/ai-inference-lab
+cd ai-inference-lab
 make all
 ```
 

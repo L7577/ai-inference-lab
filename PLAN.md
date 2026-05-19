@@ -64,7 +64,7 @@ ai-inference-lab/
 ## 操作
 
 ```bash
-cd /home/l/dev/testclaude/ai-inference-lab
+cd ai-inference-lab
 
 # 一键全流程
 make all
